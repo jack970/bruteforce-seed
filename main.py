@@ -1,13 +1,32 @@
 import itertools
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
-from mnemonic import Mnemonic
 from bip_utils import Bip39SeedGenerator, Bip44, Bip44Coins
+from mongodb_manager import MongoDBManager
+from mnemonic import Mnemonic
+
+
+def load_words_file(words_file):
+    with open(words_file, "r", encoding="utf-8") as f:
+            return f.read().splitlines()
+    
+
 
 class BruteForceSeed:
-    def __init__(self) -> None:
-        # self.carteira_esperada = "1EciYvS7FFjSYfrWxsWYjGB8K9BobBfCXw"
-        self.carteira_esperada = "1CrmJ6RqsXrdHP7QYskX18cJSVJ8z6kE58"
+    def __init__(self, carteira_esperada="1EciYvS7FFjSYfrWxsWYjGB8K9BobBfCXw",  progress_file="progress.json"):
+        self.carteira_esperada = carteira_esperada
+        self.progress_file = progress_file
+
+        self.db = MongoDBManager()
+
+        try:
+            self.attempted_combinations = set(
+                obj['combination'] for obj in tqdm(self.db.load_objects(), 
+                                                   desc="Carregando combinações tentadas", 
+                                                   unit=" registros", leave=True)
+            )
+        except Exception as e:
+            print("Error carregar combinações", e)
         
     def process_combination_sequence(self, combo, insert_progress, threads_progress, futures):
         try:
@@ -15,19 +34,30 @@ class BruteForceSeed:
             bip44 = Bip44.FromSeed(seed, Bip44Coins.BITCOIN).DeriveDefaultPath()
             address = bip44.PublicKey().ToAddress()
             
-             # Obter a chave privada e endereço da carteira
-            if address == self.carteira_esperada:
-                print("Encontrado", combo)
-                return combo
+            try:
+                self.db.log_attempt(combo, address, 'not found', False, 'insert')
+
+                # Atualiza progresso de inserção
+                insert_progress.update(1)
+
+                # Atualiza progresso das threads ativas
+                futures.discard(combo)  # Remove a combinação concluída do conjunto
+                threads_progress.n = len(futures)
+                threads_progress.refresh()
+
+                return True
+            except Exception as e:
+                print("Combinação duplicada", combo)
+
 
         except Exception as e:
-            pass
+            self.db.log_attempt(combo, 'Bip39SeedGenerator', 'error', None, 'insert')
+            return False
 
     def generate_combinations(self, words, num_words, num_threads, type_gen):
-        mnemo = Mnemonic("portuguese")
-        
         total_combinations = itertools.combinations(words, num_words)
         insert_progress = tqdm(desc="Gerando seeds", unit=" seeds", position=2)
+        mnemo = Mnemonic("portuguese")
         # Inicializa a barra de progresso das threads ativas
         threads_progress = tqdm(desc="Threads em execução", position=0)
 
@@ -38,14 +68,19 @@ class BruteForceSeed:
 
                 try:
                     for combo in total_combinations:
-                        combo_str = ' '.join(combo)
                         combinations_progress.update(1)
+                        combo_str = ' '.join(combo)
                         
-                        future = executor.submit(self.process_combination_sequence, combo_str, insert_progress, threads_progress, futures)
+                        if combo_str not in self.attempted_combinations and mnemo.check(combo_str):
+                            self.attempted_combinations.add(combo_str)
 
-                        # Atualiza a barra de progresso das threads ativas
-                        threads_progress.n = len(futures)
-                        threads_progress.refresh()
+                            futures.add(combo_str)
+                            
+                            future = executor.submit(self.process_combination_sequence, combo_str, insert_progress, threads_progress, futures)
+
+                            # Atualiza a barra de progresso das threads ativas
+                            threads_progress.n = len(futures)
+                            threads_progress.refresh()
 
                 except KeyboardInterrupt:
                     print("\nInterrompendo Threads...")
@@ -73,8 +108,8 @@ class BruteForceSeed:
 
 if __name__ == "__main__":
     arquivo_lista_palavras = "palavras-encontradas.txt"
-    with open(arquivo_lista_palavras, "r", encoding="utf-8") as f:
-        palavras = f.read().splitlines()
+    palavras = load_words_file(arquivo_lista_palavras)
 
+    # "1CrmJ6RqsXrdHP7QYskX18cJSVJ8z6kE58"
     bf = BruteForceSeed()
     bf.generate_combinations(palavras, 12, 4, None)
