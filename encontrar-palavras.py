@@ -1,3 +1,5 @@
+import re
+
 arquivo_lista_palavras = "bip39-portuguese.txt"
 arquivo_texto = "texto-165.txt"
 arquivo_saida = "palavras-encontradas.txt"
@@ -11,7 +13,12 @@ with open(arquivo_texto, "r", encoding="utf-8") as f:
     texto = f.read()
 
 # Verificar quais palavras da lista estão no texto
-encontradas = {palavra for palavra in palavras if palavra in texto}
+# Criar um conjunto com todas as palavras do texto (separadas corretamente)
+texto_formatado = texto.lower().replace(',', '').replace('.', '')
+palavras_texto = set(re.findall(r'\b\w+\b', texto_formatado))
+
+# Encontrar palavras da lista que estão exatamente no texto
+encontradas = palavras.intersection(palavras_texto)
 
 # Exibir resultado
 print(f"{len(encontradas)} Palavras encontradas no texto:")
